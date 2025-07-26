@@ -1,54 +1,41 @@
-import tensorflow as tf
-from tensorflow.keras import layers, models
-from tensorflow.keras.applications import MobileNetV2
-from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
-from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.datasets import cifar10
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras.datasets import cifar10
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.applications import MobileNetV2
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D
+from tensorflow.keras.optimizers import Adam
 
-(x_train, y_train), (x_test, y_test) = cifar10.load_data()
-y_train_cat, y_test_cat = to_categorical(y_train, 10), to_categorical(y_test, 10)
+(X_train, y_train), (X_test, y_test) = cifar10.load_data()
+X_train, X_test = X_train / 255.0, X_test / 255.0
+y_train, y_test = to_categorical(y_train, 10), to_categorical(y_test, 10)
+X_train = tf.image.resize(X_train, [96, 96])
+X_test = tf.image.resize(X_test, [96, 96])
 
-def preprocess_image(image, label):
-    image = tf.image.resize(image, (224, 224))
-    image = preprocess_input(image)
-    return image, label
+base_model = MobileNetV2(weights='imagenet', include_top=False, input_shape=(96, 96, 3))
+x = GlobalAveragePooling2D()(base_model.output)
+x = Dense(128, activation='relu')(x)
+output = Dense(10, activation='softmax')(x)
+model = Model(inputs=base_model.input, outputs=output)
 
-train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train_cat)).map(preprocess_image).shuffle(1000).batch(64).prefetch(tf.data.AUTOTUNE)
-test_ds = tf.data.Dataset.from_tensor_slices((x_test, y_test_cat)).map(preprocess_image).batch(64).prefetch(tf.data.AUTOTUNE)
+for layer in base_model.layers:
+    layer.trainable = False
 
-base_model = MobileNetV2(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
-base_model.trainable = False  # freeze
+model.compile(optimizer=Adam(), loss='categorical_crossentropy', metrics=['accuracy'])
+history = model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=5, batch_size=64)
+loss, accuracy = model.evaluate(X_test, y_test)
+print(f"Test Accuracy: {accuracy:.2f}")
 
-model = models.Sequential([
-    base_model,
-    layers.GlobalAveragePooling2D(),
-    layers.Dense(128, activation='relu'),
-    layers.Dropout(0.5),
-    layers.Dense(10, activation='softmax')
-])
-
-model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-
-model.fit(train_ds, epochs=5, validation_data=test_ds)
-
-loss, acc = model.evaluate(test_ds)
-print(f"\nTest accuracy: {acc * 100:.2f}%")
-
-class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 
-               'dog', 'frog', 'horse', 'ship', 'truck']
-
-for images, labels in test_ds.take(1):
-    preds = model.predict(images)
-    pred_labels = np.argmax(preds, axis=1)
-    true_labels = np.argmax(labels.numpy(), axis=1)
-
-    plt.figure(figsize=(12,6))
-    for i in range(8):
-        plt.subplot(2,4,i+1)
-        plt.imshow(tf.cast(images[i], tf.uint8))
-        plt.title(f"True: {class_names[true_labels[i]]}\nPred: {class_names[pred_labels[i]]}")
-        plt.axis('off')
-    plt.tight_layout()
+class_names = ['airplane','automobile','bird','cat','deer','dog','frog','horse','ship','truck']
+def predict_sample(index):
+    sample = X_test[index].numpy().reshape(1, 96, 96, 3)
+    pred = model.predict(sample)
+    plt.imshow(X_test[index].numpy())
+    plt.title(f"Predicted: {class_names[np.argmax(pred)]} | Actual: {class_names[np.argmax(y_test[index])]}")
+    plt.axis('off')
     plt.show()
+
+predict_sample(7)
+model.save("transfer_learning_cifar10_model.h5")
